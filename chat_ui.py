@@ -1,14 +1,53 @@
 import streamlit as st
 from openai import OpenAI
 import re
-import os
 import markdown
-
 from io import BytesIO
 from extractor import extract_meeting_info, extract_info
 
+# ================== ReportLab PDF 导出 ==================
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.units import inch
 
-# ================== 导出 PDF 相关 ==================
+
+def markdown_to_pdf(markdown_text):
+    """将 Markdown 文本转换为 PDF 字节流（使用 reportlab）"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+    styles = getSampleStyleSheet()
+    story = []
+
+    lines = markdown_text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            story.append(Spacer(1, 0.1 * inch))
+            continue
+
+        if line.startswith('## '):
+            story.append(Paragraph(line[3:], styles['Heading2']))
+        elif line.startswith('### '):
+            story.append(Paragraph(line[4:], styles['Heading3']))
+        elif line.startswith('# '):
+            story.append(Paragraph(line[2:], styles['Heading1']))
+        elif line.startswith('- '):
+            story.append(Paragraph(f"• {line[2:]}", styles['Normal']))
+        elif line.startswith('* '):
+            story.append(Paragraph(f"• {line[2:]}", styles['Normal']))
+        elif '|' in line and '---' not in line:
+            parts = line.split('|')
+            parts = [p.strip() for p in parts if p.strip()]
+            if parts:
+                story.append(Paragraph(f"{' | '.join(parts)}", styles['Normal']))
+        else:
+            story.append(Paragraph(line, styles['Normal']))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
 
 # ================== 读取文档函数 ==================
 def read_text_file(file):
@@ -50,37 +89,6 @@ def read_file_content(uploaded_file):
         return None
 
 
-# ================== PDF 导出函数 ==================
-def markdown_to_pdf(markdown_text):
-    """将 Markdown 文本转换为 PDF 字节流"""
-    html = markdown.markdown(markdown_text)
-    # 加入基础 CSS 让 PDF 更好看
-    html_full = f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; }}
-            h1 {{ color: #2c3e50; }}
-            h2 {{ color: #34495e; }}
-            h3 {{ color: #555; }}
-            table {{ border-collapse: collapse; width: 100%; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; }}
-            th {{ background-color: #f2f2f2; }}
-        </style>
-    </head>
-    <body>
-        {html}
-    </body>
-    </html>
-    """
-    if WEASYPRINT_AVAILABLE:
-        return HTML(string=html_full).write_pdf()
-    else:
-        st.error("weasyprint 未安装，无法生成 PDF")
-        return None
-
-
 # ================== 页面设置 ==================
 st.set_page_config(page_title="AI 助手 & 会议纪要", layout="centered")
 st.title("🤖 我的 AI 助手")
@@ -93,11 +101,10 @@ if not api_key:
 
 client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
-# ================== 初始化聊天历史 ==================
+# ================== 聊天历史 ==================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ================== 显示历史消息 ==================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -118,7 +125,7 @@ if uploaded_file is not None:
         st.error("❌ 读取文件失败")
 
 
-# ================== 检测“会议整理”意图 ==================
+# ================== 意图检测 ==================
 def is_meeting_request(text):
     keywords = ["会议", "纪要", "整理", "记录", "讨论", "参会", "决议", "待办", "总结"]
     return any(kw in text for kw in keywords)
@@ -143,20 +150,16 @@ def extract_meeting_text(text):
 prompt = st.chat_input("说点什么... (例如：帮我整理会议记录：...)")
 
 if prompt:
-    # 组合文件内容
     if file_content and len(prompt) < 20:
         full_prompt = f"{prompt}\n\n以下是会议记录文件内容：\n{file_content}"
     else:
         full_prompt = prompt
 
-    # 显示用户消息
     st.session_state.messages.append({"role": "user", "content": full_prompt})
     with st.chat_message("user"):
         st.markdown(full_prompt)
 
-    # ================== 处理回复 ==================
     if is_meeting_request(full_prompt):
-        # 会议纪要模式
         meeting_text = extract_meeting_text(full_prompt)
         if len(meeting_text) < 20:
             meeting_text = full_prompt
@@ -166,7 +169,6 @@ if prompt:
                 try:
                     result = extract_meeting_info(meeting_text, api_key)
 
-                    # 生成可读内容
                     content = f"## 会议纪要：{result.get('topic', '无主题')}\n\n"
                     content += f"**日期：** {result.get('date', '未知')}\n"
                     content += f"**参会人员：** {', '.join(result.get('attendees', []))}\n\n"
@@ -185,22 +187,20 @@ if prompt:
                     st.markdown(content)
                     st.session_state.messages.append({"role": "assistant", "content": content})
 
-                    # ===== 新增：导出 PDF 按钮 =====
-                    if WEASYPRINT_AVAILABLE:
-                        pdf_bytes = markdown_to_pdf(content)
-                        if pdf_bytes:
-                            st.download_button(
-                                label="📄 导出为 PDF",
-                                data=pdf_bytes,
-                                file_name="会议纪要.pdf",
-                                mime="application/pdf"
-                            )
+                    # ===== PDF 导出按钮 =====
+                    pdf_bytes = markdown_to_pdf(content)
+                    if pdf_bytes:
+                        st.download_button(
+                            label="📄 导出为 PDF",
+                            data=pdf_bytes,
+                            file_name="会议纪要.pdf",
+                            mime="application/pdf"
+                        )
                 except Exception as e:
                     error_msg = f"生成会议纪要时出错：{str(e)}"
                     st.error(error_msg)
                     st.session_state.messages.append({"role": "assistant", "content": error_msg})
     else:
-        # 普通聊天模式
         with st.chat_message("assistant"):
             with st.spinner("思考中..."):
                 response = client.chat.completions.create(
@@ -217,5 +217,4 @@ if prompt:
                 placeholder.markdown(full_response)
         st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-    # 清空文件内容
     file_content = ""
