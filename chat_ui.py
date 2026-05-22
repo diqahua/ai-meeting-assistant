@@ -3,18 +3,12 @@ from openai import OpenAI
 import re
 import os
 import markdown
+
 from io import BytesIO
 from extractor import extract_meeting_info, extract_info
 
+
 # ================== 导出 PDF 相关 ==================
-try:
-    from weasyprint import HTML
-
-    WEASYPRINT_AVAILABLE = True
-except ImportError:
-    WEASYPRINT_AVAILABLE = False
-    st.warning("weasyprint 未安装，PDF 导出功能将不可用。请运行: pip install weasyprint")
-
 
 # ================== 读取文档函数 ==================
 def read_text_file(file):
