@@ -1,72 +1,68 @@
 import streamlit as st
 from openai import OpenAI
 import re
-import markdown
 import os
 from io import BytesIO
 from extractor import extract_meeting_info, extract_info
 
-# ================== 使用 fpdf2 导出 PDF ==================
-from fpdf import FPDF
+# ================== ReportLab PDF 导出 ==================
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
+def markdown_to_pdf(markdown_text):
+    """将 Markdown 文本转换为 PDF 字节流（使用 reportlab + 系统字体）"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+    styles = getSampleStyleSheet()
+    story = []
 
-class PDF(FPDF):
-    def header(self):
-        self.set_font('zh_font', '', 14)
-        self.cell(0, 10, '会议纪要', 0, 1, 'C')
-        self.ln(5)
-
-
-def markdown_to_pdf(markdown_text, font_path='fonts/font.ttf'):
-    """将 Markdown 文本转换为 PDF 字节流（使用 fpdf2 + 中文字体）"""
-    # 检查字体是否存在
-    if not os.path.exists(font_path):
-        raise FileNotFoundError(f"字体文件未找到: {font_path}，请确保已正确放入 fonts 文件夹")
-
-    pdf = PDF()
-    pdf.add_font('zh_font', '', font_path, uni=True)
-    pdf.set_font('zh_font', '', 12)
-    pdf.add_page()
+    # 【关键】注册系统自带的 DejaVuSans 字体（完美支持中文）
+    # Streamlit Cloud 的 Linux 环境里自带这个字体，不需要你上传任何东西
+    try:
+        pdfmetrics.registerFont(TTFont('DejaVuSans', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+        styles['Normal'].fontName = 'DejaVuSans'
+        styles['Heading1'].fontName = 'DejaVuSans'
+        styles['Heading2'].fontName = 'DejaVuSans'
+        styles['Heading3'].fontName = 'DejaVuSans'
+    except Exception:
+        pass  # 如果找不到，就用默认字体，但一般都能找到
 
     lines = markdown_text.split('\n')
     for line in lines:
         line = line.strip()
         if not line:
-            pdf.ln(6)
+            story.append(Spacer(1, 0.1 * inch))
             continue
 
-        # 简单的 Markdown 解析
         if line.startswith('## '):
-            pdf.set_font('zh_font', '', 16)
-            pdf.cell(0, 10, line[3:], 0, 1)
-            pdf.set_font('zh_font', '', 12)
+            story.append(Paragraph(line[3:], styles['Heading2']))
         elif line.startswith('### '):
-            pdf.set_font('zh_font', '', 14)
-            pdf.cell(0, 10, line[4:], 0, 1)
-            pdf.set_font('zh_font', '', 12)
+            story.append(Paragraph(line[4:], styles['Heading3']))
         elif line.startswith('# '):
-            pdf.set_font('zh_font', '', 20)
-            pdf.cell(0, 10, line[2:], 0, 1)
-            pdf.set_font('zh_font', '', 12)
+            story.append(Paragraph(line[2:], styles['Heading1']))
         elif line.startswith('- [ ] '):
-            pdf.set_font('zh_font', '', 12)
-            pdf.cell(5, 10, '☐', 0, 0)
-            pdf.cell(0, 10, line[6:], 0, 1)
+            # 待办事项转成小黑框
+            story.append(Paragraph(f"☐ {line[6:]}", styles['Normal']))
         elif line.startswith('- '):
-            pdf.set_font('zh_font', '', 12)
-            pdf.cell(5, 10, '•', 0, 0)
-            pdf.cell(0, 10, line[2:], 0, 1)
+            story.append(Paragraph(f"• {line[2:]}", styles['Normal']))
+        elif '|' in line and '---' not in line:
+            parts = [p.strip() for p in line.split('|') if p.strip()]
+            if parts:
+                story.append(Paragraph(f"{' | '.join(parts)}", styles['Normal']))
         else:
-            pdf.set_font('zh_font', '', 12)
-            pdf.multi_cell(0, 8, line)
+            story.append(Paragraph(line, styles['Normal']))
 
-    return pdf.output(dest='S').encode('latin-1')
-
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 # ================== 读取文档函数 ==================
 def read_text_file(file):
     return file.read().decode("utf-8")
-
 
 def read_docx_file(file):
     try:
@@ -77,7 +73,6 @@ def read_docx_file(file):
         st.error("python-docx 未安装，无法读取 .docx 文件。请运行: pip install python-docx")
         return None
 
-
 def read_pdf_file(file):
     try:
         from pypdf import PdfReader
@@ -86,7 +81,6 @@ def read_pdf_file(file):
     except ImportError:
         st.error("pypdf 未安装，无法读取 .pdf 文件。请运行: pip install pypdf")
         return None
-
 
 def read_file_content(uploaded_file):
     if uploaded_file is None:
@@ -102,14 +96,12 @@ def read_file_content(uploaded_file):
         st.error(f"不支持的文件类型: {file_type}")
         return None
 
-
 # ================== 页面设置 ==================
 st.set_page_config(page_title="AI 助手 & 会议纪要", layout="centered")
 st.title("🤖 我的 AI 助手")
 
 # ================== API Key 输入 ==================
 api_key = st.text_input("DeepSeek API Key", type="password")
-
 if not api_key:
     st.stop()
 
@@ -118,7 +110,6 @@ client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 # ================== 聊天历史 ==================
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -138,12 +129,10 @@ if uploaded_file is not None:
     else:
         st.error("❌ 读取文件失败")
 
-
 # ================== 意图检测 ==================
 def is_meeting_request(text):
     keywords = ["会议", "纪要", "整理", "记录", "讨论", "参会", "决议", "待办", "总结"]
     return any(kw in text for kw in keywords)
-
 
 def extract_meeting_text(text):
     patterns = [
@@ -158,7 +147,6 @@ def extract_meeting_text(text):
             if len(content) >= 10:
                 return content
     return text
-
 
 # ================== 聊天输入 ==================
 prompt = st.chat_input("说点什么... (例如：帮我整理会议记录：...)")
@@ -203,17 +191,15 @@ if prompt:
 
                     # ===== PDF 导出按钮 =====
                     try:
-                        pdf_bytes = markdown_to_pdf(content, font_path='fonts/font.ttf')
+                        pdf_bytes = markdown_to_pdf(content)
                         st.download_button(
                             label="📄 导出为 PDF",
                             data=pdf_bytes,
                             file_name="会议纪要.pdf",
                             mime="application/pdf"
                         )
-                    except FileNotFoundError as e:
-                        st.warning(f"⚠️ 未找到中文字体文件，请确保 'fonts/font.ttf' 存在。{e}")
                     except Exception as e:
-                        st.error(f"生成 PDF 时出错：{str(e)}")
+                        st.warning(f"PDF 导出遇到小问题，但你可以使用浏览器的 '打印 -> 保存为 PDF' 功能。错误信息：{e}")
 
                 except Exception as e:
                     error_msg = f"生成会议纪要时出错：{str(e)}"

@@ -1,6 +1,6 @@
 streamlit
 openai
 markdown
-fpdf2
+reportlab
 python-docx
 pypdf
