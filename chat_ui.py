@@ -2,51 +2,65 @@ import streamlit as st
 from openai import OpenAI
 import re
 import markdown
+import os
 from io import BytesIO
 from extractor import extract_meeting_info, extract_info
 
-# ================== ReportLab PDF 导出 ==================
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.units import inch
+# ================== 使用 fpdf2 导出 PDF ==================
+from fpdf import FPDF
 
 
-def markdown_to_pdf(markdown_text):
-    """将 Markdown 文本转换为 PDF 字节流（使用 reportlab）"""
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
-    styles = getSampleStyleSheet()
-    story = []
+class PDF(FPDF):
+    def header(self):
+        self.set_font('zh_font', '', 14)
+        self.cell(0, 10, '会议纪要', 0, 1, 'C')
+        self.ln(5)
+
+
+def markdown_to_pdf(markdown_text, font_path='fonts/font.ttf'):
+    """将 Markdown 文本转换为 PDF 字节流（使用 fpdf2 + 中文字体）"""
+    # 检查字体是否存在
+    if not os.path.exists(font_path):
+        raise FileNotFoundError(f"字体文件未找到: {font_path}，请确保已正确放入 fonts 文件夹")
+
+    pdf = PDF()
+    pdf.add_font('zh_font', '', font_path, uni=True)
+    pdf.set_font('zh_font', '', 12)
+    pdf.add_page()
 
     lines = markdown_text.split('\n')
     for line in lines:
         line = line.strip()
         if not line:
-            story.append(Spacer(1, 0.1 * inch))
+            pdf.ln(6)
             continue
 
+        # 简单的 Markdown 解析
         if line.startswith('## '):
-            story.append(Paragraph(line[3:], styles['Heading2']))
+            pdf.set_font('zh_font', '', 16)
+            pdf.cell(0, 10, line[3:], 0, 1)
+            pdf.set_font('zh_font', '', 12)
         elif line.startswith('### '):
-            story.append(Paragraph(line[4:], styles['Heading3']))
+            pdf.set_font('zh_font', '', 14)
+            pdf.cell(0, 10, line[4:], 0, 1)
+            pdf.set_font('zh_font', '', 12)
         elif line.startswith('# '):
-            story.append(Paragraph(line[2:], styles['Heading1']))
+            pdf.set_font('zh_font', '', 20)
+            pdf.cell(0, 10, line[2:], 0, 1)
+            pdf.set_font('zh_font', '', 12)
+        elif line.startswith('- [ ] '):
+            pdf.set_font('zh_font', '', 12)
+            pdf.cell(5, 10, '☐', 0, 0)
+            pdf.cell(0, 10, line[6:], 0, 1)
         elif line.startswith('- '):
-            story.append(Paragraph(f"• {line[2:]}", styles['Normal']))
-        elif line.startswith('* '):
-            story.append(Paragraph(f"• {line[2:]}", styles['Normal']))
-        elif '|' in line and '---' not in line:
-            parts = line.split('|')
-            parts = [p.strip() for p in parts if p.strip()]
-            if parts:
-                story.append(Paragraph(f"{' | '.join(parts)}", styles['Normal']))
+            pdf.set_font('zh_font', '', 12)
+            pdf.cell(5, 10, '•', 0, 0)
+            pdf.cell(0, 10, line[2:], 0, 1)
         else:
-            story.append(Paragraph(line, styles['Normal']))
+            pdf.set_font('zh_font', '', 12)
+            pdf.multi_cell(0, 8, line)
 
-    doc.build(story)
-    buffer.seek(0)
-    return buffer.getvalue()
+    return pdf.output(dest='S').encode('latin-1')
 
 
 # ================== 读取文档函数 ==================
@@ -188,14 +202,19 @@ if prompt:
                     st.session_state.messages.append({"role": "assistant", "content": content})
 
                     # ===== PDF 导出按钮 =====
-                    pdf_bytes = markdown_to_pdf(content)
-                    if pdf_bytes:
+                    try:
+                        pdf_bytes = markdown_to_pdf(content, font_path='fonts/font.ttf')
                         st.download_button(
                             label="📄 导出为 PDF",
                             data=pdf_bytes,
                             file_name="会议纪要.pdf",
                             mime="application/pdf"
                         )
+                    except FileNotFoundError as e:
+                        st.warning(f"⚠️ 未找到中文字体文件，请确保 'fonts/font.ttf' 存在。{e}")
+                    except Exception as e:
+                        st.error(f"生成 PDF 时出错：{str(e)}")
+
                 except Exception as e:
                     error_msg = f"生成会议纪要时出错：{str(e)}"
                     st.error(error_msg)
