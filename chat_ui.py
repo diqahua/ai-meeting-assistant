@@ -1,40 +1,67 @@
 import streamlit as st
 from openai import OpenAI
 import re
-import markdown
+import os
 from io import BytesIO
 from extractor import extract_meeting_info, extract_info
 
-# ================== xhtml2pdf 导出 ==================
-from xhtml2pdf import pisa
+# ================== ReportLab PDF 导出（使用本地字体文件） ==================
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 def markdown_to_pdf(markdown_text):
-    """将 Markdown 文本转换为 PDF 字节流（使用 xhtml2pdf，完美中文支持）"""
-    html = markdown.markdown(markdown_text)
-    # 加入基础 CSS 和 UTF-8 声明
-    html_full = f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; }}
-            h1 {{ color: #2c3e50; }}
-            h2 {{ color: #34495e; }}
-            h3 {{ color: #555; }}
-            table {{ border-collapse: collapse; width: 100%; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; }}
-            th {{ background-color: #f2f2f2; }}
-        </style>
-    </head>
-    <body>
-        {html}
-    </body>
-    </html>
-    """
-    pdf_bytes = BytesIO()
-    # 使用 pisa 创建 PDF，encoding='utf-8' 确保中文正确显示
-    pisa.CreatePDF(html_full, dest=pdf_bytes, encoding='utf-8')
-    return pdf_bytes.getvalue()
+    """将 Markdown 文本转换为 PDF 字节流（使用项目文件夹里的 font.ttf）"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+    styles = getSampleStyleSheet()
+    story = []
+
+    # 【关键】注册你项目中的中文字体文件
+    font_path = 'fonts/font.ttf'
+    if os.path.exists(font_path):
+        try:
+            pdfmetrics.registerFont(TTFont('CustomFont', font_path))
+            styles['Normal'].fontName = 'CustomFont'
+            styles['Heading1'].fontName = 'CustomFont'
+            styles['Heading2'].fontName = 'CustomFont'
+            styles['Heading3'].fontName = 'CustomFont'
+        except Exception as e:
+            # 如果注册失败，回退到默认字体（中文会乱码，但不会报错）
+            print(f"字体注册失败: {e}")
+    else:
+        st.warning("⚠️ 未找到字体文件，PDF 中文可能会乱码")
+
+    lines = markdown_text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            story.append(Spacer(1, 0.1 * inch))
+            continue
+
+        if line.startswith('## '):
+            story.append(Paragraph(line[3:], styles['Heading2']))
+        elif line.startswith('### '):
+            story.append(Paragraph(line[4:], styles['Heading3']))
+        elif line.startswith('# '):
+            story.append(Paragraph(line[2:], styles['Heading1']))
+        elif line.startswith('- [ ] '):
+            story.append(Paragraph(f"☐ {line[6:]}", styles['Normal']))
+        elif line.startswith('- '):
+            story.append(Paragraph(f"• {line[2:]}", styles['Normal']))
+        elif '|' in line and '---' not in line:
+            parts = [p.strip() for p in line.split('|') if p.strip()]
+            if parts:
+                story.append(Paragraph(f"{' | '.join(parts)}", styles['Normal']))
+        else:
+            story.append(Paragraph(line, styles['Normal']))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 # ================== 读取文档函数 ==================
 def read_text_file(file):
