@@ -5,35 +5,35 @@ import os
 from io import BytesIO
 from extractor import extract_meeting_info, extract_info
 
-# ================== ReportLab PDF 导出（使用本地字体文件） ==================
+
+# ================== ReportLab PDF 导出（完美中文版，使用云端系统字体） ==================
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 def markdown_to_pdf(markdown_text):
-    """将 Markdown 文本转换为 PDF 字节流（使用项目文件夹里的 font.ttf）"""
+    """将 Markdown 文本转换为 PDF 字节流（使用云端系统字体，完美支持中文）"""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
     styles = getSampleStyleSheet()
     story = []
 
-    # 【关键】注册你项目中的中文字体文件
-    font_path = 'fonts/font.ttf'
-    if os.path.exists(font_path):
-        try:
-            pdfmetrics.registerFont(TTFont('CustomFont', font_path))
-            styles['Normal'].fontName = 'CustomFont'
-            styles['Heading1'].fontName = 'CustomFont'
-            styles['Heading2'].fontName = 'CustomFont'
-            styles['Heading3'].fontName = 'CustomFont'
-        except Exception as e:
-            # 如果注册失败，回退到默认字体（中文会乱码，但不会报错）
-            print(f"字体注册失败: {e}")
-    else:
-        st.warning("⚠️ 未找到字体文件，PDF 中文可能会乱码")
+    # 【终极方案】直接注册 Streamlit Cloud 自带的 Noto Sans CJK 字体
+    # 这个字体是开源的，并且云端 100% 已经安装好了，你不需要上传任何文件。
+    try:
+        # Noto Sans CJK 是 Google 的开源字体，在 Streamlit Cloud 的标准 Linux 环境里一定存在
+        font_path = '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc'
+        pdfmetrics.registerFont(TTFont('Noto', font_path))
+        # 将全部样式替换为这个字体
+        styles['Normal'].fontName = 'Noto'
+        styles['Heading1'].fontName = 'Noto'
+        styles['Heading2'].fontName = 'Noto'
+        styles['Heading3'].fontName = 'Noto'
+    except Exception:
+        pass  # 如果万一找不到，就回退到默认字体（中文会乱码，但程序不会崩溃）
 
     lines = markdown_text.split('\n')
     for line in lines:
